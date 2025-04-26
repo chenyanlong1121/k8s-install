@@ -1,0 +1,176 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuboard
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuboard-boostrap
+  namespace: kuboard
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuboard-boostrap-crb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: kuboard-boostrap
+  namespace: kuboard
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations: {}
+  labels:
+    k8s.kuboard.cn/name: kuboard-v3
+  name: kuboard-v3
+  namespace: kuboard
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      k8s.kuboard.cn/name: kuboard-v3
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        k8s.kuboard.cn/name: kuboard-v3
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/master
+                    operator: Exists
+              weight: 100
+            - preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+              weight: 100
+      containers:
+        - env:
+            - name: HOSTIP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.hostIP
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            - name: KUBOARD_ENDPOINT
+              value: 'http://k8s-master.supconit.com:32567'
+            - name: KUBOARD_AGENT_SERVER_TCP_PORT
+              value: '10081'
+          image: 'docker-registry.supconit.com/library/kuboard:v3'
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /kuboard-resources/version.json
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          name: kuboard
+          ports:
+            - containerPort: 80
+              name: web
+              protocol: TCP
+            - containerPort: 443
+              name: https
+              protocol: TCP
+            - containerPort: 10081
+              name: peer
+              protocol: TCP
+            - containerPort: 10081
+              name: peer-u
+              protocol: UDP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /kuboard-resources/version.json
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /data
+              name: data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: kuboard-boostrap
+      serviceAccountName: kuboard-boostrap
+      terminationGracePeriodSeconds: 30
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+      volumes:
+        - name: data
+          nfs:
+            path: /home/nfs_root/kuboard_data
+            server: nfs-1.supconit.com
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations: {}
+  labels:
+    k8s.kuboard.cn/name: kuboard-v3
+  name: kuboard-v3
+  namespace: kuboard
+spec:
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+    - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+    - name: web
+      nodePort: 32567
+      port: 80
+      protocol: TCP
+      targetPort: 80
+    - name: tcp
+      nodePort: 32568
+      port: 10081
+      protocol: TCP
+      targetPort: 10081
+    - name: udp
+      nodePort: 32568
+      port: 10081
+      protocol: UDP
+      targetPort: 10081
+  selector:
+    k8s.kuboard.cn/name: kuboard-v3
+  sessionAffinity: None
+  type: NodePort
+
